@@ -21,6 +21,12 @@ validate_args() {
     wait_interval=${INPUT_WAIT_INTERVAL}
   fi
 
+  first_wait_minutes=0 # Waits for 3 minutes
+  if [ "${INPUT_FIRST_WAIT_MINUTES}" ]
+  then
+    first_wait_minutes=${INPUT_FIRST_WAIT_MINUTES}
+  fi
+
   propagate_failure=true
   if [ -n "${INPUT_PROPAGATE_FAILURE}" ]
   then
@@ -83,7 +89,7 @@ validate_args() {
 }
 
 lets_wait() {
-  echo "Sleeping for ${wait_interval} seconds"
+  # echo "Sleeping for ${wait_interval} seconds"
   sleep "$wait_interval"
 }
 
@@ -101,7 +107,7 @@ api() {
     echo >&2 "api failed:"
     echo >&2 "path: $path"
     echo >&2 "response: $response"
-    if [[ "$response" == *'"Server Error"'* ]]; then 
+    if [[ "$response" == *'"Server Error"'* ]]; then
       echo "Server error - trying again"
     else
       exit 1
@@ -111,7 +117,7 @@ api() {
 
 lets_wait() {
   local interval=${1:-$wait_interval}
-  echo >&2 "Sleeping for $interval seconds"
+  # echo >&2 "Sleeping for $interval seconds"
   sleep "$interval"
 }
 
@@ -168,13 +174,15 @@ comment_downstream_link() {
 wait_for_workflow_to_finish() {
   last_workflow_id=${1:?}
   last_workflow_url="${GITHUB_SERVER_URL}/${INPUT_OWNER}/${INPUT_REPO}/actions/runs/${last_workflow_id}"
+  first_wait_seconds=$(( first_wait_minutes * 60 ))
 
   echo "Waiting for workflow to finish:"
   echo "The workflow id is [${last_workflow_id}]."
   echo "The workflow logs can be found at ${last_workflow_url}"
   echo "workflow_id=${last_workflow_id}" >> $GITHUB_OUTPUT
   echo "workflow_url=${last_workflow_url}" >> $GITHUB_OUTPUT
-  echo ""
+  echo "Waiting for workflow to complete 🕖 ..."
+  sleep $first_wait_seconds
 
   if [ -n "${INPUT_COMMENT_DOWNSTREAM_URL}" ]; then
     comment_downstream_link ${last_workflow_url}
@@ -191,8 +199,8 @@ wait_for_workflow_to_finish() {
     conclusion=$(echo "${workflow}" | jq -r '.conclusion')
     status=$(echo "${workflow}" | jq -r '.status')
 
-    echo "Checking conclusion [${conclusion}]"
-    echo "Checking status [${status}]"
+    # echo "Checking conclusion [${conclusion}]"
+    # echo "Checking status [${status}]"
     echo "conclusion=${conclusion}" >> $GITHUB_OUTPUT
   done
 
