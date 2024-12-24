@@ -45,6 +45,12 @@ validate_args() {
     wait_workflow=${INPUT_WAIT_WORKFLOW}
   fi
 
+  sentry_project=""
+  if [ -n "${INPUT_SENTRY_PROJECT}" ]
+  then
+    sentry_project=${INPUT_SENTRY_PROJECT}
+  fi
+
   if [ -z "${INPUT_OWNER}" ]
   then
     echo "Error: Owner is a required argument."
@@ -79,6 +85,11 @@ validate_args() {
   if [ "${INPUT_CLIENT_PAYLOAD}" ]
   then
     client_payload=$(echo "${INPUT_CLIENT_PAYLOAD}" | jq -c)
+
+    if [ -n ${sentry_project} ]
+    then
+      client_payload=$(jq '. += {"sentry_project": "${sentry_project}"}' --args "$@" <<< "$client_payload")
+    fi
   fi
 
   ref="main"
