@@ -86,7 +86,7 @@ validate_args() {
   then
     client_payload=$(echo "${INPUT_CLIENT_PAYLOAD}" | jq -c)
 
-    if [ -n ${sentry_project} ]
+    if [ -n "${sentry_project}" ]
     then
       client_payload=$(jq '. += {"sentry_project": "${sentry_project}"}' --args "$@" <<< "$client_payload")
     fi
