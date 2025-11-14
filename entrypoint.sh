@@ -147,26 +147,35 @@ get_workflow_runs() {
 
 trigger_workflow() {
   START_TIME=$(date +%s)
-  SINCE=$(date -u -Iseconds -d "@$((START_TIME - 120))") # Two minutes ago, to overcome clock skew
-
-  OLD_RUNS=$(get_workflow_runs "$SINCE")
+  TRIGGER_TIME=$(date -u -Iseconds -d "@$START_TIME")
+  TRIGGER_ID=$(date +%s%N | md5sum | cut -c1-8)
 
   echo >&2 "Triggering workflow:"
   echo >&2 "  workflows/${INPUT_WORKFLOW_FILE_NAME}/dispatches"
   echo >&2 "  {\"ref\":\"${ref}\",\"inputs\":${client_payload}}"
 
-  api "workflows/${INPUT_WORKFLOW_FILE_NAME}/dispatches" \
-    --data "{\"ref\":\"${ref}\",\"inputs\":${client_payload}}"
+  # Add unique trigger ID to payload to identify this specific run
+  payload_with_id=$(echo "$client_payload" | jq --arg trigger_id "$TRIGGER_ID" '. + {_trigger_id: $trigger_id}')
 
-  NEW_RUNS=$OLD_RUNS
-  while [ "$NEW_RUNS" = "$OLD_RUNS" ]
+  api "workflows/${INPUT_WORKFLOW_FILE_NAME}/dispatches" \
+    --data "{\"ref\":\"${ref}\",\"inputs\":${payload_with_id}}"
+
+  # Wait for the run with our unique ID to appear (max 50 runs per page to minimize API calls)
+  RUN_ID=""
+  while [ -z "$RUN_ID" ]
   do
     lets_wait
-    NEW_RUNS=$(get_workflow_runs "$SINCE")
+    
+    # Get recent runs and find the one matching our trigger ID
+    RUN_ID=$(api "workflows/${INPUT_WORKFLOW_FILE_NAME}/runs?created=>=${TRIGGER_TIME}&event=workflow_dispatch&per_page=50" | \
+      jq -r ".workflow_runs[] | select(.inputs._trigger_id == \"$TRIGGER_ID\") | .id | first")
+    
+    if [ "$RUN_ID" = "null" ] || [ -z "$RUN_ID" ]; then
+      RUN_ID=""
+    fi
   done
 
-  # Return new run ids
-  join -v2 <(echo "$OLD_RUNS") <(echo "$NEW_RUNS")
+  echo "$RUN_ID"
 }
 
 comment_downstream_link() {
