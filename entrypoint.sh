@@ -150,12 +150,12 @@ trigger_workflow() {
   TRIGGER_TIME=$(date -u -Iseconds -d "@$START_TIME")
   TRIGGER_ID=$(date +%s%N | md5sum | cut -c1-8)
 
+  # Add unique trigger ID to payload to identify this specific run
+  payload_with_id=$(echo "$client_payload" | jq --arg trigger_id "$TRIGGER_ID" '. + {_trigger_id: $trigger_id}')
+
   echo >&2 "Triggering workflow:"
   echo >&2 "  workflows/${INPUT_WORKFLOW_FILE_NAME}/dispatches"
   echo >&2 "  {\"ref\":\"${ref}\",\"inputs\":${client_payload}}"
-
-  # Add unique trigger ID to payload to identify this specific run
-  payload_with_id=$(echo "$client_payload" | jq --arg trigger_id "$TRIGGER_ID" '. + {_trigger_id: $trigger_id}')
 
   api "workflows/${INPUT_WORKFLOW_FILE_NAME}/dispatches" \
     --data "{\"ref\":\"${ref}\",\"inputs\":${payload_with_id}}"
@@ -165,11 +165,13 @@ trigger_workflow() {
   while [ -z "$RUN_ID" ]
   do
     lets_wait
-    
+
     # Get recent runs and find the one matching our trigger ID
-    RUN_ID=$(api "workflows/${INPUT_WORKFLOW_FILE_NAME}/runs?created=>=${TRIGGER_TIME}&event=workflow_dispatch&per_page=50" | \
-      jq -r ".workflow_runs[] | select(.inputs._trigger_id == \"$TRIGGER_ID\") | .id | first")
-    
+    _RESP=$(api "workflows/${INPUT_WORKFLOW_FILE_NAME}/runs?event=workflow_dispatch&per_page=50")
+    echo >&2 "Looking for run with trigger ID ${TRIGGER_ID}"
+    echo >&2 "$_RESP"
+    RUN_ID=$(echo "$_RESP" | jq -r ".workflow_runs[] | select(.inputs._trigger_id == \"$TRIGGER_ID\") | .id | first")
+
     if [ "$RUN_ID" = "null" ] || [ -z "$RUN_ID" ]; then
       RUN_ID=""
     fi
