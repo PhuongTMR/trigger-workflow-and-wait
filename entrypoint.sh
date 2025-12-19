@@ -119,7 +119,7 @@ api() {
     echo >&2 "path: $path"
     echo >&2 "response: $response"
     if [[ "$response" == *'"Server Error"'* ]]; then
-      echo "Server error - trying again"
+      echo >&2 "Server error - trying again"
     else
       exit 1
     fi
@@ -147,33 +147,36 @@ get_workflow_runs() {
 
 trigger_workflow() {
   START_TIME=$(date +%s)
-  TRIGGER_TIME=$(date -u -Iseconds -d "@$START_TIME")
-  TRIGGER_ID=$(date +%s%N | md5sum | cut -c1-8)
-
-  # Add unique trigger ID to payload to identify this specific run
-  payload_with_id=$(echo "$client_payload" | jq --arg trigger_id "$TRIGGER_ID" '. + {_trigger_id: $trigger_id}')
-
+  
   echo >&2 "Triggering workflow:"
   echo >&2 "  workflows/${INPUT_WORKFLOW_FILE_NAME}/dispatches"
   echo >&2 "  {\"ref\":\"${ref}\",\"inputs\":${client_payload}}"
 
+  # Dispatch API returns empty on success (HTTP 204), discard output
   api "workflows/${INPUT_WORKFLOW_FILE_NAME}/dispatches" \
-    --data "{\"ref\":\"${ref}\",\"inputs\":${payload_with_id}}"
+    --data "{\"ref\":\"${ref}\",\"inputs\":${client_payload}}" >/dev/null
 
-  # Wait for the run with our unique ID to appear (max 50 runs per page to minimize API calls)
+  # Wait for a new run to appear that was created after START_TIME
   RUN_ID=""
   while [ -z "$RUN_ID" ]
   do
     lets_wait
 
-    # Get recent runs and find the one matching our trigger ID
-    _RESP=$(api "workflows/${INPUT_WORKFLOW_FILE_NAME}/runs?event=workflow_dispatch&per_page=50")
-    echo >&2 "Looking for run with trigger ID ${TRIGGER_ID}"
-    echo >&2 "$_RESP"
-    RUN_ID=$(echo "$_RESP" | jq -r ".workflow_runs[] | select(.inputs._trigger_id == \"$TRIGGER_ID\") | .id | first")
+    # Get recent runs and find one created after we triggered
+    response=$(api "workflows/${INPUT_WORKFLOW_FILE_NAME}/runs?event=workflow_dispatch&per_page=10")
+    
+    # Find the most recent run created after START_TIME
+    RUN_ID=$(echo "$response" | jq -r --arg start "$START_TIME" '
+      [.workflow_runs[] | 
+       select((.created_at | fromdateiso8601) >= ($start | tonumber))] |
+      first | .id // empty
+    ' 2>/dev/null)
 
-    if [ "$RUN_ID" = "null" ] || [ -z "$RUN_ID" ]; then
+    # Validate RUN_ID is a number
+    if ! [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then
       RUN_ID=""
+      echo >&2 "Waiting for workflow run to appear..."
+      echo >&2 "Response received: $response"
     fi
   done
 
