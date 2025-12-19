@@ -15,41 +15,13 @@ GITHUB_API_URL="${API_URL:-https://api.github.com}"
 GITHUB_SERVER_URL="${SERVER_URL:-https://github.com}"
 
 validate_args() {
-  wait_interval=10 # Waits for 10 seconds
-  if [ "${INPUT_WAIT_INTERVAL}" ]
-  then
-    wait_interval=${INPUT_WAIT_INTERVAL}
-  fi
-
-  first_wait_minutes=0 # Waits for 3 minutes
-  if [ "${INPUT_FIRST_WAIT_MINUTES}" ]
-  then
-    first_wait_minutes=${INPUT_FIRST_WAIT_MINUTES}
-  fi
-
-  propagate_failure=true
-  if [ -n "${INPUT_PROPAGATE_FAILURE}" ]
-  then
-    propagate_failure=${INPUT_PROPAGATE_FAILURE}
-  fi
-
-  trigger_workflow=true
-  if [ -n "${INPUT_TRIGGER_WORKFLOW}" ]
-  then
-    trigger_workflow=${INPUT_TRIGGER_WORKFLOW}
-  fi
-
-  wait_workflow=true
-  if [ -n "${INPUT_WAIT_WORKFLOW}" ]
-  then
-    wait_workflow=${INPUT_WAIT_WORKFLOW}
-  fi
-
-  sentry_project=""
-  if [ -n "${INPUT_SENTRY_PROJECT}" ]
-  then
-    sentry_project=${INPUT_SENTRY_PROJECT}
-  fi
+  wait_interval=${INPUT_WAIT_INTERVAL:-10}
+  first_wait_minutes=${INPUT_FIRST_WAIT_MINUTES:-0}
+  propagate_failure=${INPUT_PROPAGATE_FAILURE:-true}
+  trigger_workflow=${INPUT_TRIGGER_WORKFLOW:-true}
+  wait_workflow=${INPUT_WAIT_WORKFLOW:-true}
+  sentry_project=${INPUT_SENTRY_PROJECT:-}
+  trigger_timeout=${INPUT_TRIGGER_TIMEOUT:-120}
 
   if [ -z "${INPUT_OWNER}" ]
   then
@@ -92,16 +64,12 @@ validate_args() {
     fi
   fi
 
-  ref="main"
-  if [ "$INPUT_REF" ]
-  then
-    ref="${INPUT_REF}"
-  fi
+  ref=${INPUT_REF:-main}
 }
 
 lets_wait() {
-  # echo "Sleeping for ${wait_interval} seconds"
-  sleep "$wait_interval"
+  local interval=${1:-$wait_interval}
+  sleep "$interval"
 }
 
 api() {
@@ -126,27 +94,9 @@ api() {
   fi
 }
 
-lets_wait() {
-  local interval=${1:-$wait_interval}
-  # echo >&2 "Sleeping for $interval seconds"
-  sleep "$interval"
-}
-
-# Return the ids of the most recent workflow runs, optionally filtered by user
-get_workflow_runs() {
-  since=${1:?}
-
-  query="event=workflow_dispatch&created=>=$since${INPUT_GITHUB_USER+&actor=}${INPUT_GITHUB_USER}&per_page=100"
-
-  echo "Getting workflow runs using query: ${query}" >&2
-
-  api "workflows/${INPUT_WORKFLOW_FILE_NAME}/runs?${query}" |
-  jq -r '.workflow_runs[].id' |
-  sort # Sort to ensure repeatable order, and lexicographically for compatibility with join
-}
-
 trigger_workflow() {
   START_TIME=$(date +%s)
+  DEADLINE=$((START_TIME + trigger_timeout))
   
   echo >&2 "Triggering workflow:"
   echo >&2 "  workflows/${INPUT_WORKFLOW_FILE_NAME}/dispatches"
@@ -158,9 +108,15 @@ trigger_workflow() {
 
   # Wait for a new run to appear that was created after START_TIME
   RUN_ID=""
+  retry_interval=$wait_interval
   while [ -z "$RUN_ID" ]
   do
-    lets_wait
+    if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+      echo >&2 "Timeout: workflow run did not appear within ${trigger_timeout} seconds"
+      exit 1
+    fi
+
+    sleep "$retry_interval"
 
     # Get recent runs and find one created after we triggered
     response=$(api "workflows/${INPUT_WORKFLOW_FILE_NAME}/runs?event=workflow_dispatch&per_page=10")
@@ -177,6 +133,9 @@ trigger_workflow() {
       RUN_ID=""
       echo >&2 "Waiting for workflow run to appear..."
       echo >&2 "Response received: $response"
+      # Exponential backoff: double interval up to 60 seconds max
+      retry_interval=$((retry_interval * 2))
+      [ "$retry_interval" -gt 60 ] && retry_interval=60
     fi
   done
 
@@ -261,6 +220,14 @@ main() {
       wait_for_workflow_to_finish "$run_id"
     done
   else
+    # Set outputs even when not waiting
+    for run_id in $run_ids
+    do
+      workflow_url="${GITHUB_SERVER_URL}/${INPUT_OWNER}/${INPUT_REPO}/actions/runs/${run_id}"
+      echo "workflow_id=${run_id}" >> $GITHUB_OUTPUT
+      echo "workflow_url=${workflow_url}" >> $GITHUB_OUTPUT
+      echo "Triggered workflow: ${workflow_url}"
+    done
     echo "Skipping waiting for workflow."
   fi
 }

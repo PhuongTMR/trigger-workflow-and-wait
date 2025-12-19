@@ -52,6 +52,9 @@ inputs:
   sentry_project:
     description: "Sentry project for upload sourcemaps"
     required: false
+  trigger_timeout:
+    description: "Timeout in seconds for waiting for the triggered workflow run to appear. default: 120"
+    required: false
 outputs:
   workflow_id:
     description: The ID of the workflow that was triggered by this action

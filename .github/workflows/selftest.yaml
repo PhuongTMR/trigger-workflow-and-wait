@@ -4,14 +4,27 @@ on:
   workflow_dispatch:
     inputs:
       test:
-        type: boolean
-        default: false
-        description: A pointless checkbox.
+        type: string
+        default: 'false'
+        description: A test flag.
+      test_mode:
+        type: string
+        default: 'success'
+        description: Test mode (success or failure)
+      sleep_seconds:
+        type: string
+        default: '10'
+        description: Seconds to sleep
 
 jobs:
   wait:
     name: Wait
     runs-on: ubuntu-latest
     steps:
-    - name: Do nothing
-      run: sleep 30
+    - name: Sleep
+      run: sleep ${{ inputs.sleep_seconds || '10' }}
+    - name: Fail if requested
+      if: ${{ inputs.test_mode == 'failure' }}
+      run: exit 1
+    - name: Success
+      run: echo "Test completed successfully"

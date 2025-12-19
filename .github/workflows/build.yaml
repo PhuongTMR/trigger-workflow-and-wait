@@ -34,20 +34,136 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         context: .
 
-  self-test:
-    name: Run self-test
+  test-trigger-and-wait:
+    name: Test trigger and wait (success)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: ./
+      - name: Trigger workflow and wait for success
+        id: trigger
+        uses: ./
         with:
           owner: ${{ github.repository_owner }}
           repo: trigger-workflow-and-wait
           ref: ${{ github.event.repository.default_branch || 'master' }}
           github_token: ${{ secrets.SECRET_PERSONAL_TOKEN }}
           workflow_file_name: selftest.yaml
-          client_payload: '{"test": "true"}'
-          wait_interval: 11
+          client_payload: '{"test": "true", "test_mode": "success", "sleep_seconds": "10"}'
+          wait_interval: 5
+          trigger_timeout: 60
           trigger_workflow: true
           wait_workflow: true
           propagate_failure: true
+      - name: Verify outputs
+        run: |
+          echo "Workflow ID: ${{ steps.trigger.outputs.workflow_id }}"
+          echo "Workflow URL: ${{ steps.trigger.outputs.workflow_url }}"
+          echo "Conclusion: ${{ steps.trigger.outputs.conclusion }}"
+          
+          # Verify workflow_id is a number
+          if ! [[ "${{ steps.trigger.outputs.workflow_id }}" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: workflow_id is not a valid number"
+            exit 1
+          fi
+          
+          # Verify workflow_url contains the workflow_id
+          if [[ "${{ steps.trigger.outputs.workflow_url }}" != *"${{ steps.trigger.outputs.workflow_id }}"* ]]; then
+            echo "ERROR: workflow_url does not contain workflow_id"
+            exit 1
+          fi
+          
+          # Verify conclusion is success
+          if [[ "${{ steps.trigger.outputs.conclusion }}" != "success" ]]; then
+            echo "ERROR: conclusion is not success"
+            exit 1
+          fi
+          
+          echo "All output validations passed!"
+
+  test-trigger-only:
+    name: Test trigger only (no wait)
+    needs: test-trigger-and-wait
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Trigger workflow without waiting
+        id: trigger
+        uses: ./
+        with:
+          owner: ${{ github.repository_owner }}
+          repo: trigger-workflow-and-wait
+          ref: ${{ github.event.repository.default_branch || 'master' }}
+          github_token: ${{ secrets.SECRET_PERSONAL_TOKEN }}
+          workflow_file_name: selftest.yaml
+          client_payload: '{"test": "true", "test_mode": "success", "sleep_seconds": "5"}'
+          trigger_timeout: 60
+          trigger_workflow: true
+          wait_workflow: false
+      - name: Verify workflow was triggered
+        run: |
+          echo "Workflow ID: ${{ steps.trigger.outputs.workflow_id }}"
+          if ! [[ "${{ steps.trigger.outputs.workflow_id }}" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: workflow_id is not a valid number"
+            exit 1
+          fi
+          echo "Trigger-only test passed!"
+
+  test-failure-propagation:
+    name: Test failure propagation
+    needs: test-trigger-only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Trigger failing workflow (expect failure)
+        id: trigger
+        continue-on-error: true
+        uses: ./
+        with:
+          owner: ${{ github.repository_owner }}
+          repo: trigger-workflow-and-wait
+          ref: ${{ github.event.repository.default_branch || 'master' }}
+          github_token: ${{ secrets.SECRET_PERSONAL_TOKEN }}
+          workflow_file_name: selftest.yaml
+          client_payload: '{"test": "true", "test_mode": "failure", "sleep_seconds": "5"}'
+          wait_interval: 5
+          trigger_timeout: 60
+          trigger_workflow: true
+          wait_workflow: true
+          propagate_failure: true
+      - name: Verify failure was propagated
+        run: |
+          if [[ "${{ steps.trigger.outcome }}" == "success" ]]; then
+            echo "ERROR: Expected failure but got success"
+            exit 1
+          fi
+          echo "Failure propagation test passed!"
+
+  test-no-failure-propagation:
+    name: Test no failure propagation
+    needs: test-failure-propagation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Trigger failing workflow (don't propagate)
+        id: trigger
+        uses: ./
+        with:
+          owner: ${{ github.repository_owner }}
+          repo: trigger-workflow-and-wait
+          ref: ${{ github.event.repository.default_branch || 'master' }}
+          github_token: ${{ secrets.SECRET_PERSONAL_TOKEN }}
+          workflow_file_name: selftest.yaml
+          client_payload: '{"test": "true", "test_mode": "failure", "sleep_seconds": "5"}'
+          wait_interval: 5
+          trigger_timeout: 60
+          trigger_workflow: true
+          wait_workflow: true
+          propagate_failure: false
+      - name: Verify step succeeded despite downstream failure
+        run: |
+          echo "Conclusion: ${{ steps.trigger.outputs.conclusion }}"
+          if [[ "${{ steps.trigger.outputs.conclusion }}" == "success" ]]; then
+            echo "ERROR: Expected failure conclusion but got success"
+            exit 1
+          fi
+          echo "No-propagation test passed - step succeeded despite downstream failure!"
